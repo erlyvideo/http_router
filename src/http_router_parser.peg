@@ -1,0 +1,110 @@
+config <- entry_line* ~;
+
+section <- space? "section" space? name:string space? "{" space? locations:(location)* space? "}" space? `
+{section, proplists:get_value(name,Node), proplists:get_value(locations,Node)}
+`;
+
+location <- space? header:("location(" name:([^\)])+ ")" space? /  "location" space?) path:string space? flags:location_flags "{" body:entries "}" space? `
+  Header = proplists:get_value(header,Node),
+  Name = case proplists:get_value(name,Header) of
+    undefined -> undefined;
+    Else -> binary_to_atom(iolist_to_binary(Else), latin1)
+  end,
+  {location, Name, proplists:get_value(path,Node), proplists:get_value(flags,Node), proplists:get_value(body,Node)}
+`;
+
+location_flags <- space? flags:flags space? / space? `
+  proplists:get_value(flags, Node, [])
+`;
+
+flags <- "(" head:flag tail:(";" flag:flag)* ")" / "(" space? ")" `
+case proplists:get_value(head, Node) of
+  undefined -> [];
+  Head ->
+    Tail = [proplists:get_value(flag,N) || N <- proplists:get_value(tail,Node)],
+    [Head|Tail]
+end
+`;
+
+flag <- alpha_string "~" flag_value / alpha_string "=" flag_value / "!" alpha_string / alpha_string`
+case Node of
+  [<<"!">>, Key] -> {'not',Key};
+  [Key, <<"~">>, Value] -> {re, Key, Value};
+  [Key, <<"=">>, Value] -> {eq, Key, Value};
+  Key -> {defined, Key}
+end
+`;
+
+flag_value <- ([^;)])+ `iolist_to_binary(Node)`;
+
+entries <- (entry_line)* ~;
+
+entry_line <- location:location / section:section / space? command:location_command space? ";" space? `
+case Node of
+  {location, Location} -> Location;
+  {section, Section} -> Section;
+  _ -> proplists:get_value(command, Node)
+end  
+`;
+
+location_command <- command_root / command_rewrite / command_set / command_rack / command_include / 
+                    command_rtsp / command_file / command_handler / command_hds / command_hls ~;
+
+command_root <- "root" space? path:path `{root,proplists:get_value(path,Node)}`;
+command_rewrite <- "rewrite" space? path space? path `{rewrite, lists:nth(3,Node), lists:nth(5,Node)}`;
+command_set <- "set" space? key:string space? value:string `{set, proplists:get_value(key,Node), proplists:get_value(value,Node)}`;
+command_rack <- "rack" space? url:string `{rack, proplists:get_value(url,Node)}`;
+command_include <- "include" space? "@" section:path / "include" space? path:path `
+case proplists:get_value(section, Node) of
+  undefined -> {include_file, proplists:get_value(path,Node)};
+  _ -> {include_section, proplists:get_value(section,Node)}
+end
+`;
+command_file <- "file" `file`;
+command_rtsp <- "rtsp" space? url:string / "rtsp" `
+case Node of
+  <<"rtsp">> -> rtsp;
+  _ -> {rtsp, proplists:get_value(url, Node)}
+end
+`;
+command_handler <- "handler" space? module:string space? function:string space? args:(handler_arg space? )* `
+Args = [S || [S, _] <- proplists:get_value(args, Node)],
+{handler, binary_to_atom(proplists:get_value(module,Node),latin1), binary_to_atom(proplists:get_value(function,Node),latin1), Args}
+`;
+
+command_hds <- "hds_manifest" / "hds_segment" `
+case Node of
+  <<"hds_manifest">> -> {hds,manifest};
+  <<"hds_segment">> -> {hds,segment}
+end`;
+
+command_hls <- "hls_manifest" / "hls_segment" `
+case Node of
+  <<"hls_manifest">> -> {hls,manifest};
+  <<"hls_segment">> -> {hls,segment}
+end`;
+
+handler_arg <- "$" variable:string / string `
+case proplists:get_value(variable, Node) of
+  undefined -> Node;
+  Var -> {var, binary_to_atom(Var,latin1)}
+end
+`;
+
+path <- string ~;
+
+string <- (nonspace)+ `iolist_to_binary(Node)`;
+
+nonspace <- [^ ;] ~;
+
+alpha_string <- alpha_char+ `iolist_to_binary(Node)`;
+
+alpha_char <- [A-Za-z_] ~;
+
+
+space <- (white / comment_to_eol)+ `
+[]
+`;
+
+white <- [ \t\n\r] ~;
+comment_to_eol <- !'%{' '#' (!"\n" .)* ~;

@@ -1,0 +1,15 @@
+{application, http_router,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { http_router_app, []}},
+  {env, [
+    {config_path, "priv/routes.conf"},
+    {frequency, 3000}
+  ]}
+ ]}.
