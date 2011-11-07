@@ -39,9 +39,9 @@ Config file consists of commands.
 
 Commands may be:
 
-# instructions
-# locations 
-# sections
+* instructions
+* locations 
+* sections
 
 instructions are lines that are translated to some Env modifiers: set, rewrite or some instructions like calling other module.
 
