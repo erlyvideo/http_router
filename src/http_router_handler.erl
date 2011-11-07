@@ -9,13 +9,12 @@ init({_Transport, http}, Req, _Options) ->
   {ok, Req, state}.
 
 handle(Req1, State) ->
-  
   {Path, Req2} = cowboy_http_req:raw_path(Req1),
   Env = [{path,Path}],
-  case http_router:handle(Env, Req2) of
+  case http_router:handle(Req2, Env) of
     {ok, Req3} -> {ok, Req3, State};
     unhandled -> {ok, reply_404(Req2), State};
-    {unhandled, _Env, Req3} -> {ok, reply_404(Req3), State}
+    {unhandled, Req3, _Env} -> {ok, reply_404(Req3), State}
   end.
 
 reply_404(Req) ->

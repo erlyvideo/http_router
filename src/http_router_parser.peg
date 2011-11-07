@@ -1,7 +1,7 @@
 config <- entry_line* ~;
 
-section <- space? "section" space? name:string space? "{" space? locations:(location)* space? "}" space? `
-{section, proplists:get_value(name,Node), proplists:get_value(locations,Node)}
+section <- space? "section" space? name:string space? "{" space? section_body:(entry_line)* space? "}" space? `
+{section, proplists:get_value(name,Node), proplists:get_value(section_body,Node)}
 `;
 
 location <- space? header:("location(" name:([^\)])+ ")" space? /  "location" space?) path:string space? flags:location_flags "{" body:entries "}" space? `
@@ -48,11 +48,23 @@ end
 `;
 
 location_command <- command_root / command_rewrite / command_set / command_rack / command_include / 
-                    command_rtsp / command_file / command_handler / command_hds / command_hls ~;
+                    command_file / command_handler ~;
 
 command_root <- "root" space? path:path `{root,proplists:get_value(path,Node)}`;
-command_rewrite <- "rewrite" space? path space? path `{rewrite, lists:nth(3,Node), lists:nth(5,Node)}`;
-command_set <- "set" space? key:string space? value:string `{set, proplists:get_value(key,Node), proplists:get_value(value,Node)}`;
+command_rewrite <- "rewrite" space? args:(var:string? space? pattern:path space? replacement:path / pattern:path space? replacement:path) `
+Args = proplists:get_value(args, Node),
+Var = binary_to_atom(proplists:get_value(var, Args, <<"path">>), latin1),
+{rewrite, Var, proplists:get_value(pattern,Args), proplists:get_value(replacement,Args)}
+`;
+command_set <- "set" space? key:string space? val:("$" var:string / value:string) `
+Key = binary_to_atom(proplists:get_value(key,Node), latin1),
+Val = proplists:get_value(val, Node),
+case Val of
+  {value, Value} -> {set, Key, val, Value};
+  _ -> Var = proplists:get_value(var, Val),
+       {set, Key, var, binary_to_atom(Var, latin1)}
+end
+`;
 command_rack <- "rack" space? url:string `{rack, proplists:get_value(url,Node)}`;
 command_include <- "include" space? "@" section:path / "include" space? path:path `
 case proplists:get_value(section, Node) of
@@ -61,28 +73,11 @@ case proplists:get_value(section, Node) of
 end
 `;
 command_file <- "file" `file`;
-command_rtsp <- "rtsp" space? url:string / "rtsp" `
-case Node of
-  <<"rtsp">> -> rtsp;
-  _ -> {rtsp, proplists:get_value(url, Node)}
-end
-`;
 command_handler <- "handler" space? module:string space? function:string space? args:(handler_arg space? )* `
 Args = [S || [S, _] <- proplists:get_value(args, Node)],
 {handler, binary_to_atom(proplists:get_value(module,Node),latin1), binary_to_atom(proplists:get_value(function,Node),latin1), Args}
 `;
 
-command_hds <- "hds_manifest" / "hds_segment" `
-case Node of
-  <<"hds_manifest">> -> {hds,manifest};
-  <<"hds_segment">> -> {hds,segment}
-end`;
-
-command_hls <- "hls_manifest" / "hls_segment" `
-case Node of
-  <<"hls_manifest">> -> {hls,manifest};
-  <<"hls_segment">> -> {hls,segment}
-end`;
 
 handler_arg <- "$" variable:string / string `
 case proplists:get_value(variable, Node) of

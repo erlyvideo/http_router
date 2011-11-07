@@ -10,3 +10,6 @@ raw:
 	ERL_LIBS=../../deps rebar compile
 	erl -pa ebin -noshell -eval 'io:format("~p~n", [http_router_parser:file("../../priv/flussonic.conf")])' -s init stop
 
+code:
+	ERL_LIBS=../../deps rebar compile
+	erl -pa ebin -noshell -eval 'io:format("~n~n~s~n", [element(2,http_router_compiler:generate_router("../../priv/flussonic.conf"))])' -s init stop

@@ -6,8 +6,13 @@
 
 
 file(Path) ->
-  Config = http_router_parser:file(Path),
-  parse_config(Config).
+  case http_router_parser:file(Path) of
+    {_ParsedConfig, Rest, {{line,Line},{column,Column}}} ->
+      error_logger:error_msg("Couldn't parse config file ~s~nError is nearby here:~n~n~s~n~n", [Path, Rest]),
+      {error, {Line,Column,Rest}};
+    Config ->  
+      {ok, parse_config(Config)}
+  end.
   % Config.
   
 parse_config(Config) ->
@@ -15,16 +20,12 @@ parse_config(Config) ->
   lists:map(fun
     ({location, Name, Path, Flags, Value}) -> 
       convert_location({location, Name, Path, Flags, parse_config(substitute_secion_includes(Value, Sections))});
-    ({rewrite, Re, Replacement}) ->
-      convert_rewrite(Re, Replacement);
+    ({rewrite, Val, Re, Replacement}) ->
+      convert_rewrite(Val, Re, Replacement);
     ({root, Root}) ->
-      {set, root, Root};
+      {set, root, val, Root};
     (file) ->
       {handler, static_file, send, []};
-    ({hds,Command}) ->
-      {handler, hds_handler, Command, []};
-    ({hls,Command}) ->
-      {handler, hls_handler, Command, []};
     ({rack,Path}) ->
       {handler, cowboy_rack_handler, handle, [Path]};
     (Else) -> Else
@@ -48,41 +49,30 @@ convert_location({location, Name, Path, Flags, Instructions}) ->
   {location, Name, Re, ProperFlags, Instructions}.
 
 
-convert_rewrite(Re, Replacement) ->
-  {rewrite, Re, re:replace(Replacement, "\\$(\\d+)", "\\\\\\1", [{return,binary}])}.
+convert_rewrite(Val, Re, Replacement) ->
+  {rewrite, Val, Re, re:replace(Replacement, "\\$(\\d+)", "\\\\\\1", [{return,binary}])}.
 
 
-rewrite_route_entry(URL, ExList) ->
-  {{ok,NewURL},VarList} = case re:run(URL,"\\(:[^\\)]*\\(") of
-    nomatch ->
-      case re:run(URL,"\\(*:([-_0-9a-zA-Z]+)\\)*",[{capture,all_but_first,list},global]) of
-        {match,Vars} -> {convert_to_pattern(URL,ExList), [list_to_atom(Var) || [Var] <- Vars]};
-        _ -> {convert_to_pattern(URL,ExList),[]}
-      end; 
-    {match,_} ->
-      {{ok,"parsing_error"},[]}
+rewrite_route_entry(URL, Options) ->
+  case re:run(URL,"(.*\\([^:]+)",[{capture,all_but_first,list},global]) of
+    {match, _} -> erlang:throw({invalid_location_route,URL});
+    _ -> ok
+  end,
+  
+  {NewURL,VarList} = case re:run(URL,"\\(*:([-_0-9a-zA-Z]+)\\)*",[{capture,all_but_first,list},global]) of
+    {match,Vars} -> {convert_to_pattern(URL,Options), [list_to_atom(Var) || [Var] <- Vars]};
+    _ -> {convert_to_pattern(URL,Options)++".*",[]}
   end,
   {NewURL, VarList}.
 
-convert_to_pattern(URL,ExList)->
-  Convert = fun() ->
-	  Pattern1=exlist(URL,ExList),
-  	case re:replace(Pattern1,"(\\(*:[-_a-zA-Z0-9]+\\)*)","([^/]+)",[global,{return,list}]) of
-  	  Value2 when is_list(Value2) -> {ok,Value2};
-  	  nomatch -> ""
-  	end
-  end,
-  case re:run(URL,"(.*\\([^:]+)",[{capture,all_but_first,list},global]) of
-    nomatch ->
-      Convert();
-    {match,Error} ->
-      io:format("Route rule error near ~p~n",[Error]),
-      error
-  end.
+convert_to_pattern(URL, Options)->
+  Pattern1 = specify_regexps(URL, Options),
+	re:replace(Pattern1,"(\\(*:[-_a-zA-Z0-9]+\\)*)","([^/]+)",[global,{return,list}]).
 
-exlist(URL,[])->
+specify_regexps(URL,[])->
   URL;
-exlist(URL,[{Name,Pattern}|ExList]) ->
+  
+specify_regexps(URL,[{Name,Pattern}|RegexList]) ->
   Re = lists:flatten(io_lib:format("\\(?:~s\\)?", [Name])),
 
   Pattern1 = re:replace(Pattern, "\\\\", "\\\\\\\\", [{return,list}]),
@@ -91,6 +81,6 @@ exlist(URL,[{Name,Pattern}|ExList]) ->
 
   List=re:replace(URL, Re, Pat,[{return,list}]),
   % io:format("Replace ~p with ~p => ~p~n", [Re, Pat, List]),
-  exlist(List,ExList).
+  specify_regexps(List,RegexList).
 
   
