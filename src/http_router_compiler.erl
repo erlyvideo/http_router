@@ -3,50 +3,53 @@
 -include_lib("kernel/include/file.hrl").
 -include("log.hrl").
 
--export([generate_and_compile/1, generate_router/1]).
--export([ensure_loaded/1, check/1]).
+-export([generate_and_compile/2, generate_router/2]).
+-export([ensure_loaded/2, check/1, check/2]).
 
 
 check(Path) ->
-  {ok, Module} = ensure_loaded(Path),
+  check(Path, http_router).
+
+check(Path, Module) ->
+  {ok, Module} = ensure_loaded(Path, Module),
   {ok, #file_info{mtime = MTime}} = file:read_file_info(Path),
   CTime = Module:ctime(),
   if
     CTime < MTime ->
       ?D({reload,Path,CTime,MTime}),
       code:soft_purge(Module),
-      generate_and_compile(Path);
+      generate_and_compile(Path, Module);
     true ->
       ok
   end.  
 
-ensure_loaded(Path) ->
-  case erlang:module_loaded(http_router) of
-    true -> {ok, http_router};
-    false -> generate_and_compile(Path)
+ensure_loaded(Path, Module) ->
+  case erlang:module_loaded(Module) of
+    true -> {ok, Module};
+    false -> generate_and_compile(Path, Module)
   end.
 
 
-generate_and_compile(ConfigPath) ->
-  case generate_router(ConfigPath) of
-    {ok, Code} -> compile_router(http_router, Code);
+generate_and_compile(ConfigPath, Module) ->
+  case generate_router(ConfigPath, Module) of
+    {ok, Code} -> compile_router(Module, Code);
     {error, Reason} -> {error, Reason}
   end.
 
 
-generate_router(ConfigPath) ->
+generate_router(ConfigPath, Module) ->
   case http_router_config:file(ConfigPath) of
     {ok, Config} ->
-      make_compiled_code(ConfigPath, Config);
+      make_compiled_code(ConfigPath, Config, Module);
     {error, Reason} ->
       {error, Reason}
   end.
 
-make_compiled_code(ConfigPath, Config) ->
+make_compiled_code(ConfigPath, Config, Module) ->
   {ok, #file_info{mtime = MTime}} = file:read_file_info(ConfigPath),
   {ok, Code, _Index} = translate_commands(Config),
   Module = [
-  "-module(http_router).\n",
+  io_lib:format("-module(~p).\n", [Module]),
   "-export([handle/2, ctime/0]).\n\n",
   "ctime() -> ", io_lib:format("~p", [MTime]), ".\n\n",
   "handle(Req, Env) -> \n",
@@ -59,7 +62,7 @@ make_compiled_code(ConfigPath, Config) ->
 
 compile_router(Module, Code) ->
   Path = lists:flatten(io_lib:format("~s.erl", [Module])),
-  file:write_file(Path, Code),
+  % file:write_file(Path, Code),
   {ModName, Bin} = dynamic_compile:from_string(binary_to_list(Code), [report,verbose]),
   {module, ModName} = code:load_binary(ModName, Path, Bin),
   {ok, ModName}.
@@ -68,12 +71,28 @@ compile_router(Module, Code) ->
 translate_commands(Config) ->
   translate_commands(Config, 0, 0, 0, []).
 
-translate_commands([{location, _Name, {Re, Keys}, _Flags, LocationBody}|Rest], FunIdx, ReqIdx, EnvIdx, Acc) ->
+translate_commands([{location, _Name, {Re, Keys}, Flags, LocationBody}|Rest], FunIdx, ReqIdx, EnvIdx, Acc) ->
   RegexKeys = io_lib:format("~p", [[0|Keys]]),
   LocationName = io_lib:format("location~p", [FunIdx+1]),
   NextStep = io_lib:format("location~p", [FunIdx+2]),
   ReS = io_lib:format("~p", [Re]),
+  
+  NextStepCall = io_lib:format("      ~s(Req~p, Env~p)\n", [NextStep, ReqIdx, EnvIdx]),
+  
+  FlagConditions1 = lists:map(fun
+    ({'not', Key}) -> io_lib:format("proplists:get_value(~s, Env~p) == undefined", [Key, EnvIdx]);
+    ({defined, Key}) -> io_lib:format("proplists:get_value(~s, Env~p) =/= undefined", [Key, EnvIdx]);
+    (_) -> undefined
+  end, Flags),
+  FlagConditions2 = ["CondFlag = ", string:join([Cond || Cond <- FlagConditions1, Cond =/= undefined], " andalso "), ",\n"],
+  
   Code = [
+  if Flags == [] -> "";
+  true -> 
+    [ FlagConditions2,
+    "if CondFlag -> \n"
+    ]
+  end,
   "  case re:run(proplists:get_value(path,Env", integer_to_list(EnvIdx), "), ", ReS,", [{capture,", RegexKeys, ",binary}]) of\n",
   "    {match, [_MatchedURL|Values]} -> \n",
   % "io:format(\"Match ~p to ~p~n\", [proplists:get_value(path,Env", integer_to_list(EnvIdx), "), ",ReS, "]), ",
@@ -81,10 +100,13 @@ io_lib:format("      Env~p = lists:ukeymerge(1, lists:ukeysort(1,lists:zip(~240p
 io_lib:format("      case ~s(Req~p, Env~p) of\n", [LocationName, ReqIdx, EnvIdx+1]),
 io_lib:format("        {ok, Req~p} -> {ok, Req~p};\n", [ReqIdx+1, ReqIdx+1]),
 io_lib:format("        {unhandled, Req~p, Env~p} -> ~s(Req~p, Env~p)\n", [ReqIdx+1, EnvIdx+2, NextStep, ReqIdx+1, EnvIdx+2]),
-  "      end;"
+  "      end;\n"
   "    nomatch -> \n",
-  % "io:format(\"nomatch ~p to ~p~n\", [proplists:get_value(path,Env", integer_to_list(EnvIdx), "), ",ReS, "]), ",
-io_lib:format("      ~s(Req~p, Env~p)\n", [NextStep, ReqIdx, EnvIdx]),
+  NextStepCall,
+  
+  if Flags == [] -> "";
+  true -> ["end;\n true -> ", NextStepCall]
+  end,
   "  end.\n\n",
 
   LocationName, "(Req0, Env0) -> \n"
