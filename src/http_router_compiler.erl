@@ -48,7 +48,7 @@ generate_router(ConfigPath, Module) ->
 make_compiled_code(ConfigPath, Config, Module) ->
   {ok, #file_info{mtime = MTime}} = file:read_file_info(ConfigPath),
   {ok, Code, _Index} = translate_commands(Config),
-  Module = [
+  ModuleCode = [
   io_lib:format("-module(~p).\n", [Module]),
   "-export([handle/2, ctime/0]).\n\n",
   "ctime() -> ", io_lib:format("~p", [MTime]), ".\n\n",
@@ -57,7 +57,7 @@ make_compiled_code(ConfigPath, Config, Module) ->
   "handle0(Req0, Env0) -> \n",
   Code
   ],
-  {ok, iolist_to_binary(Module)}.
+  {ok, iolist_to_binary(ModuleCode)}.
 
 
 compile_router(Module, Code) ->
